@@ -578,6 +578,18 @@ PG_USER=postgres
 PG_PASSWORD=postgres
 PG_DATABASE=postgres
 ````
+
+### OOP IN PYTHON 
+1. Encapsulation – “Keep data safe inside objects”
+
+2.  Abstraction – “Show only what’s necessary”
+
+3.  3. Inheritance – “Reuse code from a base class”
+  
+4 Polymorphism – “Same method, different behavior”
+
+
+
 ```
 # Import necessary libraries for environment variables, web app, database, AI, and utilities
 from dotenv import load_dotenv  # Loads environment variables from a .env file
