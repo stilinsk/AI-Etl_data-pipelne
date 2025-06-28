@@ -579,33 +579,33 @@ PG_PASSWORD=postgres
 PG_DATABASE=postgres
 ````
 ```
+# Import necessary libraries for environment variables, web app, database, AI, and utilities
+from dotenv import load_dotenv  # Loads environment variables from a .env file
+load_dotenv()  # Loads the .env file into the script's environment
 
-from dotenv import load_dotenv  # Imports a module to load environment variables from a .env file
-load_dotenv()  # Loads the environment variables from the .env file into the script
+import streamlit as st  # Streamlit for creating interactive web apps
+import os  # For accessing environment variables
+import psycopg2  # For connecting to and querying PostgreSQL databases
+from openai import OpenAI  # For interacting with OpenAI's API
+import traceback  # For handling and displaying error stack traces
+from typing import List, Dict, Tuple, Optional  # Type hints for better code clarity
+from datetime import datetime  # For handling timestamps
+import json  # For parsing and formatting JSON data
 
-import streamlit as st  # Imports Streamlit, a framework to create interactive web apps
-import os  # Imports the os module to handle environment variables and file operations
-import psycopg2  # Imports psycopg2, a PostgreSQL database adapter for Python
-from openai import OpenAI  # Imports the OpenAI library to interact with OpenAI's API
-import traceback  # Imports traceback to handle and display error details
-from typing import List, Dict, Tuple, Optional  # Imports type hints for better code readability and type checking
-from datetime import datetime  # Imports datetime to work with dates and times
-import json  # Imports json to handle JSON data formatting and parsing
-
-# Initializes session state variables to store data across reruns if they don't exist
+# Initialize Streamlit session state to persist data across reruns
 if 'query_history' not in st.session_state:
-    st.session_state.query_history = []  # Stores a list of past queries and their details
+    st.session_state.query_history = []  # List to store past queries and their details
 if 'current_query' not in st.session_state:
-    st.session_state.current_query = None  # Tracks the currently selected query from history
+    st.session_state.current_query = None  # Index of the currently selected query
 if 'follow_up_active' not in st.session_state:
-    st.session_state.follow_up_active = False  # Flags whether a follow-up question is being processed
+    st.session_state.follow_up_active = False  # Flag for follow-up question processing
 if 'follow_up_question' not in st.session_state:
-    st.session_state.follow_up_question = ""  # Stores the follow-up question text
+    st.session_state.follow_up_question = ""  # Text of the follow-up question
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))  # Creates an OpenAI client using the API key from environment variables
+# Initialize OpenAI client with API key from environment variables
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Defines the database schema knowledge for the weather_data table
-
+# Define the database schema for the weather_data table
 SCHEMA_KNOWLEDGE = {
     "weather_data": {
         "columns": {
@@ -626,7 +626,7 @@ SCHEMA_KNOWLEDGE = {
     }
 }
 
-# Defines geographic knowledge with continents and their cities
+# Define geographic knowledge mapping continents to cities
 GEOGRAPHIC_KNOWLEDGE = {
     "africa": [
         'Nairobi', 'Kampala', 'Thika', 'Cairo', 'Johannesburg',
@@ -654,48 +654,49 @@ GEOGRAPHIC_KNOWLEDGE = {
     ]
 }
 
+# Define SQLAgent class to handle query processing and generation
 class SQLAgent:
     def __init__(self):
-        self.thinking_steps = []  # A list to store the agent's step-by-step thought process
-        self.self_correction_attempts = 0  # Counts how many times the agent tries to fix a bad SQL query
-        self.max_self_correction_attempts = 3  # Limits the number of correction attempts to 3
-        self.context_memory = []  # Stores a history of questions, SQL queries, and results for context
-        
+        # Initialize instance variables for tracking thought process and memory
+        self.thinking_steps = []  # List to log thought process steps
+        self.self_correction_attempts = 0  # Counter for SQL correction attempts
+        self.max_self_correction_attempts = 3  # Maximum allowed correction attempts
+        self.context_memory = []  # List to store query history for context
+
     def log_thinking(self, step: str, content: str):
-        """Record the agent's thought process"""
-        # Adds a new step to the thinking_steps list with a timestamp, step name, and details
+        """Record the agent's thought process with timestamp"""
+        # Append a new step to thinking_steps with timestamp, step name, and content
         self.thinking_steps.append({
             "timestamp": datetime.now().isoformat(),
             "step": step,
             "content": content
         })
-    
+
     def add_to_memory(self, question: str, sql: str, results: List[Dict]):
-        """Add current query to memory for future reference"""
-        # Saves the current question, SQL query, and a sample of results to context_memory
+        """Add query details to context memory for future reference"""
+        # Store question, SQL, and a sample of results in context_memory
         self.context_memory.append({
             "question": question,
             "sql": sql,
             "results_summary": str(results[:3]) if results else "No results",
             "timestamp": datetime.now().isoformat()
         })
-    
+
     def get_context_summary(self) -> str:
-        """Generate summary of previous queries for context"""
-        # Returns a summary of all previous queries if any exist, otherwise a default message
+        """Generate a summary of previous queries for context"""
+        # Return a formatted string of past queries or a default message if none exist
         if not self.context_memory:
             return "No previous queries in this session."
-        
         summary = "Previous queries in this session:\n"
         for i, item in enumerate(self.context_memory, 1):
             summary += f"\n{i}. Question: {item['question']}\n   SQL: {item['sql']}\n   Results (sample): {item['results_summary']}\n"
         return summary
-    
+
     def analyze_question(self, question: str) -> Dict:
-        """Perform deep analysis of the user's question with context"""
-        # Gets the context from previous queries
+        """Analyze the user's question using OpenAI to extract intent and entities"""
+        # Get context from previous queries
         context = self.get_context_summary()
-        
+        # Create a prompt for OpenAI to analyze the question
         analysis_prompt = f"""
         Analyze this weather data question deeply, considering this context:
         {context}
@@ -715,24 +716,22 @@ class SQLAgent:
         - reference_details: How this relates to previous queries if applicable
         - geographic_scope: The continent mentioned if any (e.g., "Africa", "Asia")
         - mentioned_cities: List of specifically mentioned cities
-        
-        Return ONLY the JSON object, nothing else.
         """
-        
+        # Call OpenAI API to analyze the question
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a sophisticated question analyzer with context awareness i  have already given you context . Respond with only a valid JSON object."},
+                {"role": "system", "content": "You are a sophisticated question analyzer with context awareness."},
                 {"role": "user", "content": analysis_prompt}
             ]
         )
-        
         try:
+            # Parse the JSON response from OpenAI
             analysis = json.loads(response.choices[0].message.content)
             self.log_thinking("Question Analysis", json.dumps(analysis, indent=2))
             return analysis
         except json.JSONDecodeError:
-            # Returns a default analysis if JSON parsing fails
+            # Return a default analysis if JSON parsing fails
             return {
                 "intent": "unknown",
                 "entities": [],
@@ -745,11 +744,12 @@ class SQLAgent:
                 "geographic_scope": None,
                 "mentioned_cities": []
             }
-    
+
     def generate_sql_plan(self, analysis: Dict, question: str) -> str:
-        """Create a step-by-step plan for SQL generation with context"""
+        """Create a step-by-step plan for SQL generation"""
+        # Get context from previous queries
         context = self.get_context_summary()
-        
+        # Create a prompt for OpenAI to generate a SQL plan
         plan_prompt = f"""
         Based on this analysis:
         {json.dumps(analysis, indent=2)}
@@ -773,7 +773,7 @@ class SQLAgent:
         
         Respond with clear numbered steps.
         """
-        
+        # Call OpenAI API to generate the plan
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -781,21 +781,22 @@ class SQLAgent:
                 {"role": "user", "content": plan_prompt}
             ]
         )
-        
+        # Extract and log the plan
         plan = response.choices[0].message.content
         self.log_thinking("SQL Generation Plan", plan)
         return plan
-    
+
     def generate_initial_sql(self, plan: str, question: str, analysis: Dict) -> str:
-        """Generate initial SQL based on the plan"""
+        """Generate initial SQL query based on the plan"""
+        # Get context if the question references previous queries
         context = self.get_context_summary() if analysis.get("references_previous", False) else ""
-       
+        # Check if a geographic scope is mentioned
         if analysis.get("geographic_scope"):
             continent = analysis["geographic_scope"].lower()
             if continent in GEOGRAPHIC_KNOWLEDGE:
                 cities = GEOGRAPHIC_KNOWLEDGE[continent]
                 city_list = ", ".join([f"'{city}'" for city in cities])
-                
+                # Handle average temperature queries for a continent
                 if "average" in question.lower() or "avg" in question.lower():
                     sql_prompt = f"""
                     Based on this plan:
@@ -819,9 +820,9 @@ class SQLAgent:
                     SELECT AVG(temperature) as avg_temp FROM weather_data WHERE city IN ('Nairobi', 'Cairo', ...);
                     
                     Return ONLY the SQL query with no additional text, no markdown formatting, and no code block syntax.
-                    The response must be executable SQL only.
                     """
                 else:
+                    # Handle general queries with geographic filter
                     sql_prompt = f"""
                     Based on this plan:
                     {plan}
@@ -835,9 +836,9 @@ class SQLAgent:
                     Generate a PostgreSQL SQL query for the weather_data table.
                     Apply this geographic filter: WHERE city IN ({city_list})
                     Return ONLY the SQL query with no additional text, no markdown formatting, and no code block syntax.
-                    The response must be executable SQL only.
                     """
         else:
+            # Handle queries without geographic scope
             sql_prompt = f"""
             Based on this plan:
             {plan}
@@ -850,9 +851,8 @@ class SQLAgent:
             
             Generate a PostgreSQL SQL query for the weather_data table.
             Return ONLY the SQL query with no additional text, no markdown formatting, and no code block syntax.
-            The response must be executable SQL only.
             """
-        
+        # Call OpenAI API to generate the SQL
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -860,18 +860,18 @@ class SQLAgent:
                 {"role": "user", "content": sql_prompt}
             ]
         )
-        
+        # Clean and log the generated SQL
         sql = response.choices[0].message.content.strip()
         sql = sql.replace("```sql", "").replace("```", "").strip()
-        
         self.log_thinking("Initial SQL Generation", sql)
         return sql
-    
+
     def validate_sql(self, sql: str) -> Tuple[bool, str]:
-        """Validate the SQL before execution"""
+        """Validate SQL query for syntax and logical correctness"""
+        # Check for markdown syntax in the query
         if "```" in sql:
             return False, "Query contains markdown code block syntax"
-        
+        # Create a prompt for OpenAI to validate the SQL
         validation_prompt = f"""
         Validate this PostgreSQL SQL query for syntax and logical correctness:
         {sql}
@@ -886,26 +886,27 @@ class SQLAgent:
         VALID: true|false
         REASON: "reason for validation result"
         """
-        
+        # Call OpenAI API to validate
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a SQL validator meaning you wil check for syntax errors and logical consistency with the schema."},
+                {"role": "system", "content": "You are a SQL validator checking for syntax errors and logical consistency with the schema."},
                 {"role": "user", "content": validation_prompt}
             ]
         )
-        
+        # Parse the validation result
         result = response.choices[0].message.content
         valid = "VALID: true" in result
         reason = result.split("REASON: ")[1].strip('"') if "REASON: " in result else "Unknown error"
         self.log_thinking("SQL Validation", f"Valid: {valid}\nReason: {reason}")
         return valid, reason
-    
+
     def self_correct_sql(self, sql: str, validation_result: str, question: str) -> Optional[str]:
-        """Attempt to self-correct invalid SQL"""
+        """Attempt to correct an invalid SQL query"""
+        # Check if maximum correction attempts are reached
         if self.self_correction_attempts >= self.max_self_correction_attempts:
             return None
-            
+        # Create a prompt for OpenAI to correct the SQL
         correction_prompt = f"""
         The following SQL query was invalid:
         {sql}
@@ -924,24 +925,25 @@ class SQLAgent:
         
         Please correct the SQL query. Return ONLY the corrected SQL with no additional text.
         """
-        
+        # Call OpenAI API to correct the SQL
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a SQL corrector - meaning you can correct sql queries since you are a sql expert ."},
+                {"role": "system", "content": "You are a SQL corrector."},
                 {"role": "user", "content": correction_prompt}
             ]
         )
-        
+        # Increment correction attempts and log the corrected SQL
         corrected_sql = response.choices[0].message.content.strip()
         self.self_correction_attempts += 1
         self.log_thinking(f"Self-Correction Attempt {self.self_correction_attempts}", corrected_sql)
         return corrected_sql
-    
+
     def explain_query(self, sql: str, question: str, language: str, analysis: Dict) -> str:
-        """Generate a sophisticated explanation of the query"""
+        """Generate a detailed explanation of the SQL query"""
+        # Get context if the question references previous queries
         context = self.get_context_summary() if analysis.get("references_previous", False) else ""
-        
+        # Create a prompt for OpenAI to explain the SQL
         explanation_prompt = f"""
         The user asked (in {language}): "{question}"
         
@@ -967,7 +969,7 @@ class SQLAgent:
         
         Structure the explanation clearly with appropriate headings.
         """
-        
+        # Call OpenAI API to generate the explanation
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -975,11 +977,11 @@ class SQLAgent:
                 {"role": "user", "content": explanation_prompt}
             ]
         )
-        
         return response.choices[0].message.content
-    
+
     def generate_visualization_recommendation(self, sql: str, results: List[Dict]) -> str:
-        """Recommend how to visualize the results"""
+        """Recommend a visualization for the query results"""
+        # Create a prompt for OpenAI to recommend a visualization
         recommendation_prompt = f"""
         Based on this SQL query:
         {sql}
@@ -996,7 +998,7 @@ class SQLAgent:
         
         Provide a detailed recommendation with reasoning.
         """
-        
+        # Call OpenAI API to generate the recommendation
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -1004,11 +1006,11 @@ class SQLAgent:
                 {"role": "user", "content": recommendation_prompt}
             ]
         )
-        
         return response.choices[0].message.content
-    
+
     def generate_follow_up_questions(self, question: str, sql: str, results: List[Dict]) -> List[str]:
-        """Generate relevant follow-up questions"""
+        """Generate 3-5 relevant follow-up questions"""
+        # Create a prompt for OpenAI to generate follow-up questions
         prompt = f"""
         Based on this interaction:
         User question: {question}
@@ -1020,7 +1022,7 @@ class SQLAgent:
         Return as a JSON list like this:
         ["question1", "question2", "question3"]
         """
-        
+        # Call OpenAI API to generate follow-ups
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -1028,93 +1030,97 @@ class SQLAgent:
                 {"role": "user", "content": prompt}
             ]
         )
-        
         try:
+            # Parse the JSON response
             return json.loads(response.choices[0].message.content)
         except json.JSONDecodeError:
+            # Return default follow-ups if parsing fails
             return [
                 f"What's the average temperature for cities in these results?",
                 f"Can you show me the wind speed distribution?",
                 f"How does this compare to data from last month?"
             ]
 
+# Define DatabaseManager class to handle database connections and queries
 class DatabaseManager:
     def __init__(self):
+        # Initialize connection parameters from environment variables
         self.conn_params = {
-            "host": os.getenv("PG_HOST"),  # Gets the database host from environment variables
-            "port": os.getenv("PG_PORT"),  # Gets the database port from environment variables
-            "user": os.getenv("PG_USER"),  # Gets the database user from environment variables
-            "password": os.getenv("PG_PASSWORD"),  # Gets the database password from environment variables
-            "dbname": os.getenv("PG_DATABASE")  # Gets the database name from environment variables
+            "host": os.getenv("PG_HOST"),
+            "port": os.getenv("PG_PORT"),
+            "user": os.getenv("PG_USER"),
+            "password": os.getenv("PG_PASSWORD"),
+            "dbname": os.getenv("PG_DATABASE")
         }
-    
+
     def execute_query(self, query: str) -> Tuple[List[str], List[Tuple]]:
-        """Execute SQL query and return results"""
-        # Checks if the query contains markdown syntax and raises an error if true
+        """Execute a SQL query and return column names and rows"""
+        # Check for markdown syntax in the query
         if "```" in query:
             raise ValueError("Query contains markdown syntax and cannot be executed")
-        
-        conn = psycopg2.connect(**self.conn_params)  # Connects to the PostgreSQL database
+        # Connect to the PostgreSQL database
+        conn = psycopg2.connect(**self.conn_params)
         try:
-            with conn.cursor() as cur:  # Creates a cursor to execute SQL commands
-                cur.execute(query)  # Executes the SQL query
-                if cur.description:  # Checks if the query returned column names
-                    colnames = [desc[0] for desc in cur.description]  # Gets column names
-                    rows = cur.fetchall()  # Fetches all rows from the query result
+            with conn.cursor() as cur:
+                cur.execute(query)  # Execute the SQL query
+                if cur.description:  # Check if the query returned columns
+                    colnames = [desc[0] for desc in cur.description]  # Get column names
+                    rows = cur.fetchall()  # Fetch all rows
                     return colnames, rows
-                return [], []  # Returns empty lists if no data is returned
+                return [], []  # Return empty lists if no data
         finally:
-            conn.close()  # Ensures the database connection is closed after use
+            conn.close()  # Ensure the connection is closed
 
+# Function to display query results in the Streamlit app
 def display_query_result(query_data):
-    """Display a query result from history"""
-    # Displays a header with the query's timestamp
+    """Display query details, results, and recommendations"""
+    # Show a header with the query's timestamp
     st.subheader(f"🔍 Query from {query_data['timestamp']}")
-    
-    with st.expander("View Details", expanded=True):  # Creates an expandable section for details
-        st.markdown(f"**Question:** {query_data['question']}")  # Shows the original question
-        
-        st.markdown("**Generated SQL:**")  # Labels the SQL code section
-        st.code(query_data['sql'], language="sql")  # Displays the SQL query with syntax highlighting
-        
-        st.markdown("**Explanation:**")  # Labels the explanation section
-        st.markdown(query_data['explanation'])  # Shows the detailed explanation
-        
-        if query_data['results']:  # Checks if there are any results
-            st.markdown("**Results:**")  # Labels the results section
-            st.dataframe(  # Displays the results in a table
+    # Create an expandable section for details
+    with st.expander("View Details", expanded=True):
+        st.markdown(f"**Question:** {query_data['question']}")  # Display the question
+        st.markdown("**Generated SQL:**")  # Label for SQL
+        st.code(query_data['sql'], language="sql")  # Display SQL with syntax highlighting
+        st.markdown("**Explanation:**")  # Label for explanation
+        st.markdown(query_data['explanation'])  # Display the explanation
+        # Check if there are results to display
+        if query_data['results']:
+            st.markdown("**Results:**")  # Label for results
+            st.dataframe(  # Display results in a table
                 data=query_data['results'],
-                use_container_width=True,  # Makes the table fit the container width
-                hide_index=True,  # Hides the row index
-                height=min(400, 35 * len(query_data['results']) + 3),  # Sets a dynamic height
+                use_container_width=True,  # Fit table to container
+                hide_index=True,  # Hide row indices
+                height=min(400, 35 * len(query_data['results']) + 3),  # Dynamic table height
             )
-            
-            st.markdown("**Visualization Recommendation:**")  # Labels the visualization section
-            st.markdown(query_data['visualization_rec'])  # Shows the visualization recommendation
+            st.markdown("**Visualization Recommendation:**")  # Label for visualization
+            st.markdown(query_data['visualization_rec'])  # Display visualization recommendation
         else:
-            st.info("No results found for this query.")  # Informs the user if no results are available
-        
-        if query_data['follow_ups']:  # Checks if there are follow-up questions
-            st.markdown("**Suggested Follow-ups:**")  # Labels the follow-ups section
-            for i, question in enumerate(query_data['follow_ups'], 1):  # Loops through follow-up questions
-                st.markdown(f"{i}. {question}")  # Displays each follow-up with a number
+            st.info("No results found for this query.")  # Inform if no results
+        # Display follow-up questions if available
+        if query_data['follow_ups']:
+            st.markdown("**Suggested Follow-ups:**")  # Label for follow-ups
+            for i, question in enumerate(query_data['follow_ups'], 1):
+                st.markdown(f"{i}. {question}")  # Display numbered follow-ups
 
+# Main function to run the Streamlit app
 def main():
-    st.set_page_config(  # Configures the Streamlit app's appearance
+    # Configure Streamlit app settings
+    st.set_page_config(
         page_title="Advanced Weather Data AI Agent with Memory",
-        page_icon="🌍",  # Sets a globe icon for the app
-        layout="wide"  # Sets the layout to wide for more space
+        page_icon="🌍",  # Globe icon for the app
+        layout="wide"  # Wide layout for more space
     )
-    
-    st.title("🌦️ Advanced Weather Data Query Agent with Memory")  # Sets the main title
+    # Display app title
+    st.title("🌦️ Advanced Weather Data Query Agent with Memory")
+    # Describe the agent's capabilities
     st.markdown("""
     This AI agent can:
     - Remember previous queries in your session
     - Understand follow-up questions in context
     - Provide continuous analysis without losing history
     - Suggest relevant follow-up questions
-    """)  # Describes the agent's capabilities
-    
+    """)
+    # Initialize session state variables if not set
     if 'query_history' not in st.session_state:
         st.session_state.query_history = []
     if 'current_query' not in st.session_state:
@@ -1123,73 +1129,68 @@ def main():
         st.session_state.follow_up_active = False
     if 'follow_up_context' not in st.session_state:
         st.session_state.follow_up_context = ""
-    
-    # Displays a sidebar with query history if it exists
+    # Display query history in the sidebar
     if st.session_state.query_history:
         st.sidebar.title("Query History")
         for i, query in enumerate(st.session_state.query_history):
+            # Create buttons for each query in history
             if st.sidebar.button(f"Query {i+1}: {query['question'][:50]}...", key=f"hist_{i}"):
                 st.session_state.current_query = i
-        
+        # Display the selected query's details
         if st.session_state.current_query is not None:
             display_query_result(st.session_state.query_history[st.session_state.current_query])
-    
-    # Creates a form for the main query input
+    # Create a form for user input
     with st.form("main_query_form"):
+        # Text area for the user's question
         question = st.text_area("Ask your weather data question (English or Swahili):", 
                               height=100,
-                              key="main_question")  # Text area for user input
-        
-        submitted = st.form_submit_button("Analyze with AI Agent", type="primary")  # Submit button for the form
-        
-        if submitted and question:  # Checks if the form is submitted and a question is entered
-            agent = SQLAgent()  # Creates a new SQLAgent instance
-            db_manager = DatabaseManager()  # Creates a new DatabaseManager instance
-            
-            with st.status("Processing your question...", expanded=True) as status:  # Shows a processing status
+                              key="main_question")
+        # Submit button for the form
+        submitted = st.form_submit_button("Analyze with AI Agent", type="primary")
+        # Process the question if submitted
+        if submitted and question:
+            agent = SQLAgent()  # Create a new SQLAgent instance
+            db_manager = DatabaseManager()  # Create a new DatabaseManager instance
+            # Show processing status
+            with st.status("Processing your question...", expanded=True) as status:
                 try:
-                    st.write("🔍 Analyzing your question with context...")  # Indicates analysis step
-                    analysis = agent.analyze_question(question)  # Analyzes the question
-                    language = analysis.get("language", "english")  # Gets the detected language
-                    
-                    st.write("📝 Creating execution plan...")  # Indicates planning step
-                    plan = agent.generate_sql_plan(analysis, question)  # Generates a SQL plan
-                    
-                    st.write("💻 Generating SQL query...")  # Indicates SQL generation step
-                    sql = agent.generate_initial_sql(plan, question, analysis)  # Generates the initial SQL
-                    
-                    valid, reason = agent.validate_sql(sql)  # Validates the SQL query
+                    st.write("🔍 Analyzing your question with context...")  # Indicate analysis
+                    analysis = agent.analyze_question(question)  # Analyze the question
+                    language = analysis.get("language", "english")  # Get detected language
+                    st.write("📝 Creating execution plan...")  # Indicate planning
+                    plan = agent.generate_sql_plan(analysis, question)  # Generate SQL plan
+                    st.write("💻 Generating SQL query...")  # Indicate SQL generation
+                    sql = agent.generate_initial_sql(plan, question, analysis)  # Generate SQL
+                    # Validate the SQL query
+                    valid, reason = agent.validate_sql(sql)
                     while not valid and agent.self_correction_attempts < agent.max_self_correction_attempts:
-                        st.warning(f"⚠️ Found issue: {reason}")  # Warns about validation issues
-                        st.write("🔄 Attempting self-correction...")  # Indicates correction attempt
-                        sql = agent.self_correct_sql(sql, reason, question)  # Attempts to correct the SQL
+                        st.warning(f"⚠️ Found issue: {reason}")  # Warn about validation issues
+                        st.write("🔄 Attempting self-correction...")  # Indicate correction
+                        sql = agent.self_correct_sql(sql, reason, question)  # Correct SQL
                         if sql:
-                            valid, reason = agent.validate_sql(sql)  # Re-validates the corrected SQL
+                            valid, reason = agent.validate_sql(sql)  # Re-validate
                         else:
                             break
-                    
+                    # Handle invalid SQL after max attempts
                     if not valid:
-                        st.error("❌ Could not generate valid SQL after multiple attempts.")  # Errors if validation fails
-                        st.code(reason, language="text")  # Shows the reason for failure
-                        status.update(label="Processing failed", state="error")  # Updates status to failed
+                        st.error("❌ Could not generate valid SQL after multiple attempts.")
+                        st.code(reason, language="text")
+                        status.update(label="Processing failed", state="error")
                         return
-                    
-                    st.write("⚡ Executing query...")  # Indicates query execution step
-                    colnames, rows = db_manager.execute_query(sql)  # Executes the SQL query
-                    results = [dict(zip(colnames, row)) for row in rows] if colnames else []  # Formats results into a list of dictionaries
-                    
-                    st.write("📖 Generating explanations...")  # Indicates explanation generation step
-                    explanation = agent.explain_query(sql, question, language, analysis)  # Generates an explanation
-                    
+                    st.write("⚡ Executing query...")  # Indicate query execution
+                    colnames, rows = db_manager.execute_query(sql)  # Execute the query
+                    results = [dict(zip(colnames, row)) for row in rows] if colnames else []  # Format results
+                    st.write("📖 Generating explanations...")  # Indicate explanation generation
+                    explanation = agent.explain_query(sql, question, language, analysis)  # Generate explanation
+                    # Generate visualization and follow-ups if results exist
                     if results:
-                        visualization_rec = agent.generate_visualization_recommendation(sql, results)  # Recommends visualization
-                        follow_ups = agent.generate_follow_up_questions(question, sql, results)  # Generates follow-up questions
+                        visualization_rec = agent.generate_visualization_recommendation(sql, results)
+                        follow_ups = agent.generate_follow_up_questions(question, sql, results)
                     else:
-                        visualization_rec = "No results to visualize."  # Sets default if no results
-                        follow_ups = []  # Sets empty follow-ups if no results
-                    
-                    agent.add_to_memory(question, sql, results)  # Adds the query to memory
-                    
+                        visualization_rec = "No results to visualize."
+                        follow_ups = []
+                    agent.add_to_memory(question, sql, results)  # Add to context memory
+                    # Store query details
                     query_data = {
                         "question": question,
                         "sql": sql,
@@ -1199,38 +1200,20 @@ def main():
                         "follow_ups": follow_ups,
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "thinking_steps": agent.thinking_steps
-                    }  # Creates a dictionary with all query details
-                    
-                    st.session_state.query_history.append(query_data)  # Adds the query to history
-                    st.session_state.current_query = len(st.session_state.query_history) - 1  # Sets the current query index
-                    
-                    status.update(label="Processing complete!", state="complete")  # Updates status to complete
-                
-                except Exception as e:  # Handles any errors during processing
-                    st.error(f"❌ Error: {str(e)}")  # Displays the error message
-                    st.code(traceback.format_exc(), language="python")  # Shows the full traceback
-                    status.update(label="Processing failed", state="error")  # Updates status to failed
+                    }
+                    # Append to query history and set as current query
+                    st.session_state.query_history.append(query_data)
+                    st.session_state.current_query = len(st.session_state.query_history) - 1
+                    status.update(label="Processing complete!", state="complete")  # Update status
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")  # Display error
+                    st.code(traceback.format_exc(), language="python")  # Show traceback
+                    status.update(label="Processing failed", state="error")  # Update status
                     return
-            
-            st.rerun()  # Reruns the app to reflect changes
-    
-    # Follow-up question handling (commented out as per your request to focus on main part)
-    # ... (follow-up code omitted)
-    
-    if st.session_state.get('follow_up_active', False) and st.session_state.follow_up_context:
-        # ... (follow-up code omitted)
+            st.rerun()  # Rerun the app to refresh the UI
 
+# Run the main function if the script is executed directly
 if __name__ == "__main__":
-    main()  # Runs the main function when the script is executed directly
-```
-
-you can run the following to install strwamlit  and open ai
-
-```
-pip install streamlit
-```
- and to run  run by 
- ```
-streamlit run app.py
+    main()
 ```
 
